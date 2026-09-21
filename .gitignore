@@ -1,0 +1,17 @@
+# Baza danych SQLite i pliki pomocnicze
+*.db
+*.db-wal
+*.db-shm
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.venv/
+env/
+venv/
+
+# IDE i systemowe
+.vscode/
+.idea/
+Thumbs.db

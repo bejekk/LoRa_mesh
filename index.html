@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Wilgotności Gleby (LoRa)</title>
+    <!-- Chart.js do rysowania lekkich wykresów -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f6f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+            text-align: center;
+        }
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-size: 1rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .card .unit {
+            font-size: 1.2rem;
+            color: #888;
+            font-weight: normal;
+        }
+        .chart-box {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+        }
+        .status-bar {
+            text-align: center;
+            margin-top: 15px;
+            font-size: 0.85rem;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h2>🌱 Monitor Wilgotności Gleby</h2>
+        <p>Stacja bazowa Raspberry Pi / Windows</p>
+    </header>
+
+    <div class="cards">
+        <div class="card">
+            <h3>Wilgotność</h3>
+            <div class="value" id="humidity">-- <span class="unit">%</span></div>
+        </div>
+        <div class="card">
+            <h3>Bateria</h3>
+            <div class="value" id="battery">-- <span class="unit">V</span></div>
+        </div>
+        <div class="card">
+            <h3>Czujnik</h3>
+            <div class="value" id="sensor_id" style="font-size: 1.3rem; padding-top: 8px;">--</div>
+        </div>
+    </div>
+
+    <div class="chart-box">
+        <canvas id="moistureChart"></canvas>
+    </div>
+
+    <div class="status-bar" id="last-updated">
+        Ostatnia aktualizacja: oczekiwanie na dane...
+    </div>
+</div>
+
+<script>
+    // Konfiguracja wykresu Chart.js
+    const ctx = document.getElementById('moistureChart').getContext('2d');
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Wilgotność gleby (%)',
+                data: [],
+                borderColor: '#2ecc71',
+                backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    min: 0,
+                    max: 100,
+                    title: { display: true, text: 'Wilgotność (%)' }
+                },
+                x: {
+                    title: { display: true, text: 'Godzina' }
+                }
+            }
+        }
+    });
+
+    // Funkcja pobierająca najnowsze dane i historię
+    async function fetchData() {
+        try {
+            // 1. Pobieramy ostatni pomiar
+            const latestRes = await fetch('/api/latest');
+            const latestJson = await latestRes.json();
+            
+            if (latestJson.status === 'ok') {
+                const item = latestJson.data;
+                document.getElementById('humidity').innerHTML = `${item.humidity} <span class="unit">%</span>`;
+                document.getElementById('battery').innerHTML = `${item.battery_voltage} <span class="unit">V</span>`;
+                document.getElementById('sensor_id').textContent = item.sensor_id;
+                
+                const timeFormatted = new Date(item.timestamp).toLocaleTimeString();
+                document.getElementById('last-updated').textContent = `Ostatnia aktualizacja: ${timeFormatted}`;
+            }
+
+            // 2. Pobieramy historię do wykresu (ostatnie 30 próbek)
+            const historyRes = await fetch('/api/history?limit=30');
+            const historyJson = await historyRes.json();
+
+            if (historyJson.status === 'ok') {
+                const labels = historyJson.data.map(p => new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+                const values = historyJson.data.map(p => p.humidity);
+
+                chart.data.labels = labels;
+                chart.data.datasets[0].data = values;
+                chart.update();
+            }
+        } catch (err) {
+            console.error('Błąd pobierania danych:', err);
+        }
+    }
+
+    // Pierwsze pobranie danych
+    fetchData();
+
+    // Automatyczne odświeżanie danych co 5 sekund
+    setInterval(fetchData, 5000);
+</script>
+
+</body>
+</html>
+
