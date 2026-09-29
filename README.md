@@ -1,10 +1,13 @@
 # 📡 System Monitoringu Gleby: LoRa Mesh / Point-to-Point
 
 Kompletny, energooszczędny system telemetryczny do bezprzewodowego monitorowania wilgotności gleby i stanu zasilania. Projekt obejmuje:
-1. **Węzły pomiarowe (Sensory)** oraz **Mostek radiowy (Bramę)** oparte o mikrokontroler **Seeed XIAO nRF52840** i moduł radiowy **Semtech SX1262 (Wio-SX1262)**.
-2. **Własny, niskopoziomowy sterownik SX1262 w czystym C** (bez użycia ciężkich bibliotek zewnętrznych takich jak RadioLib czy Arduino-LoRa).
-3. **Dwukierunkowy protokół radiowy z potwierdzeniem (Stop-and-Wait ARQ / ACK)**, umożliwiający wprowadzanie czujników w tryb głębokiego uśpienia (*Deep Sleep*).
-4. **Serwer bazodanowy i panel wizualizacyjny na Raspberry Pi** oparty o **Python (FastAPI)**, bazę **SQLite** oraz responsywny interfejs **HTML/JavaScript (Chart.js)**.
+1. **Węzły pomiarowe (Sensory):**
+   * **Moduł docelowy (`sensor/`):** Oparty o jednoukładowy mikrokontroler z radiem **Seeed Studio LoRa-E5 mini (STM32WLE5JC)**, działający pod kontrolą **FreeRTOS (CMSIS_V2)**, ze sterownikami **LL (Low-Layer)** oraz bezpośrednią obsługą rejestrów modemu radiowego CMSIS.
+   * **Węzeł prototypowy (`lora_bridge/`):** Oparty o mikrokontroler **Seeed XIAO nRF52840** i moduł radiowy **Semtech SX1262 (Wio-SX1262)**.
+2. **Mostek radiowy / Bramę (`lora_bridge/`):** Odbiera ramki LoRa w eterze, odsyła potwierdzenie ACK i przekazuje dane po USB UART do bazy danych.
+3. **Własne, niskopoziomowe sterowniki radiowe w czystym C** (bez użycia ociężałych bibliotek zewnętrznych takich jak RadioLib czy Arduino-LoRa).
+4. **Dwukierunkowy protokół radiowy z potwierdzeniem (Stop-and-Wait ARQ / ACK)**, umożliwiający wprowadzanie czujników w tryb głębokiego uśpienia (*Deep Sleep*).
+5. **Serwer bazodanowy i panel wizualizacyjny na Raspberry Pi** oparty o **Python (FastAPI)**, bazę **SQLite** oraz responsywny interfejs **HTML/JavaScript (Chart.js)**.
 
 ---
 
@@ -13,19 +16,19 @@ Kompletny, energooszczędny system telemetryczny do bezprzewodowego monitorowani
 ```mermaid
 flowchart LR
     subgraph Pole / Doniczka
-        S[Czujnik Gleby<br/>XIAO nRF52840 + SX1262]
+        S["Czujnik Gleby<br/>Seeed LoRa-E5 mini (STM32WLE5JC)<br/>FreeRTOS + LL Drivers"]
     end
 
     subgraph Stacja Bazowa
-        B[Mostek LoRa<br/>XIAO nRF52840 + SX1262]
-        RPi[Raspberry Pi / Serwer<br/>FastAPI + SQLite + Web UI]
+        B["Mostek LoRa (Brama)<br/>XIAO nRF52840 + SX1262"]
+        RPi["Raspberry Pi / Serwer<br/>FastAPI + SQLite + Web UI"]
     end
 
     subgraph Użytkownik
-        W[Przeglądarka WWW / Smartfon]
+        W["Przeglądarka WWW / Smartfon"]
     end
 
-    S -- "LoRa 868 MHz (Telemetria)" --> B
+    S -- "LoRa 868 MHz (Telemetria JSON)" --> B
     B -- "LoRa 868 MHz (Potwierdzenie ACK)" --> S
     B -- "USB Serial (115200 baud)" --> RPi
     RPi --> W
@@ -218,3 +221,66 @@ Plik `lora_bridge/src/main.cpp` posiada przełącznik wyboru roli w liniach 17�
    ```
 
 4. Otwórz w przeglądarce adres `http://<IP_RASPBERRY_PI>:8000` (lub `http://localhost:8000`), aby zobaczyć wykresy na żywo!
+
+---
+
+## 🛰️ Nowy Węzeł Pomiarowy: STM32WLE5JC (LoRa-E5 mini)
+
+Docelowy czujnik wilgotności gleby zrealizowany jest na dedykowanym module **Seeed Studio LoRa-E5 mini** z układem SoC **STM32WLE5JC** (katalog `sensor/`).
+
+### 1. Architektura i Konfiguracja Sprzętowa
+* **Mikrokontroler:** STM32WLE5JCI6 (ARM Cortex-M4 @ 48 MHz, 256 KB Flash, 64 KB RAM).
+* **System operacyjny:** **FreeRTOS (CMSIS_V2)**.
+* **Sterowniki:** **LL (Low-Layer)** dla GPIO, RCC i USART1 – maksymalna wydajność, brak ukrytych pętli blokujących i minimalne zużycie pamięci.
+* **Radio:** Bezpośrednia obsługa wewnętrznej magistrali `SUBGHZSPI` przez rejestry CMSIS (`PWR->SUBGHZSPICR`, `PWR->SR2`, `SUBGHZSPI->DR`).
+
+### 2. Przypisanie Wyprowadzeń (Pinout LoRa-E5 mini)
+* **`PA4` (RF_SW_CTRL1):** Sterowanie torem odbiorczym przełącznika antenowego (RX: `PA4=1, PA5=0`).
+* **`PA5` (RF_SW_CTRL2):** Sterowanie torem nadawczym przełącznika antenowego (TX HP: `PA4=0, PA5=1`).
+* **`PB0` (VDDTCXO):** Automatyczne zasilanie oscylatora TCXO 32 MHz z wewnętrznego LDO.
+* **`PB5` (LED_USER):** Dioda LED na płytce (aktywna stanem wysokim).
+* **`PB6` (USART1_TX) / `PB7` (USART1_RX):** Port szeregowy do debugowania wyprowadzony na USB-C (115200 baud).
+* **`PA13` (SWDIO) / `PA14` (SWCLK):** Interfejs programowania SWD (ST-Link).
+
+### 3. Kompilacja Projektu STM32
+Projekt oparty jest o standardowy system **CMake + Ninja** z pakietu `STM32CubeCLT`:
+```powershell
+cd sensor
+$env:PATH = "C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin;C:\ST\STM32CubeCLT_1.22.0\Ninja\bin;C:\ST\STM32CubeCLT_1.22.0\CMake\bin;" + $env:PATH
+cmake --preset Debug
+cmake --build --preset Debug
+```
+Szczegółowy opis architektury dla programistów i agentów AI znajduje się w dedykowanym pliku [`sensor/STM32_PROJECT_OVERVIEW.md`](sensor/STM32_PROJECT_OVERVIEW.md).
+
+---
+
+## 📋 Status Projektu i Co Trzeba Teraz Zrobić (Roadmap)
+
+### Aktualny stan prac:
+- [x] Opracowanie i przetestowanie bramy LoRa i serwera wizualizacyjnego (`lora_bridge/` + `server/`).
+- [x] Konfiguracja mikrokontrolera STM32WLE5JC w STM32CubeMX pod kątem modułu LoRa-E5 mini (`sensor/sensor.ioc`).
+- [x] Wybór sterowników LL (Low-Layer) dla RCC, GPIO, USART i odseparowanie SysTick od FreeRTOS (Timebase na TIM1).
+- [x] Konfiguracja oscylatora TCXO 32 MHz oraz przełącznika antenowego PA4/PA5.
+- [x] Utworzenie projektu CMake w `sensor/` i pomyślna weryfikacja kompilacji (`sensor.elf`).
+- [x] Sporządzenie dokumentacji architektonicznej dla agentów AI ([`sensor/STM32_PROJECT_OVERVIEW.md`](sensor/STM32_PROJECT_OVERVIEW.md)).
+
+### Co trzeba teraz zrobić (Kolejne kroki):
+1. **Przekierowanie `printf()` na port USB-C (`USART1`):**
+   * Implementacja `__io_putchar()` w `Core/Src/usart.c` z użyciem rejestrów LL, aby widzieć logi telemetryczne w VS Code Serial Monitor (115200 baud).
+2. **Implementacja niskopoziomowego sterownika radiowego dla LoRa-E5 (`radio_e5.c / .h`):**
+   * Konfiguracja zasilania TCXO (1.7V, komenda `SetTCXOMode`), przetwornicy DCDC i trybu `STDBY_XOSC`.
+   * Ustawienie parametrów sieci LoRa: 868.0 MHz, SF7, BW 125 kHz, CR 4/5, Sync Word 0x1424, PA Config +14 dBm (RFO_HP).
+   * Sterowanie pinami RF switch (PA4/PA5) synchronicznie ze zmianami stanów TX/RX modemu.
+3. **Stworzenie zadania FreeRTOS (`telemetryTask`):**
+   * Okresowe generowanie ramki JSON `{"id":"plant_pot_1","hum":...,"vbat":...,"seq":...}`.
+   * Transmisja pakietu przez radio, załączenie diody LED na PB5.
+   * Przełączenie w tryb nasłuchu RX i oczekiwanie na ramkę potwierdzenia `ACK:<seq>` z bramki (okno max 1500 ms).
+   * Pomiar i logowanie parametrów łącza (czas odpowiedzi, RSSI, SNR).
+4. **Wgranie firmware i weryfikacja łącza radiowego:**
+   * Podłączenie płytki LoRa-E5 mini przez programator ST-Link (SWD: SWDIO, SWCLK, GND, 3V3).
+   * Wgranie pliku `sensor.elf` i test łączności z bramką uruchomioną na XIAO.
+5. **Integracja właściwego sensora wilgotności gleby:**
+   * Podłączenie czujnika analogowego (ADC) lub cyfrowego (I2C) do wyprowadzeń LoRa-E5 mini.
+   * Pomiar rzeczywistego napięcia zasilania bateryjnego.
+6. **Implementacja oszczędzania energii:**
+   * Przejście w tryb uśpienia FreeRTOS Tickless Idle oraz tryb mikrokontrolera Stop2 między pomiarami.

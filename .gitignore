@@ -15,3 +15,11 @@ venv/
 .vscode/
 .idea/
 Thumbs.db
+
+# STM32 / CMake build
+sensor/build/
+build/
+*.elf
+*.bin
+*.hex
+*.map
