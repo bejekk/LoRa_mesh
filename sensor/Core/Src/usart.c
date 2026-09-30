@@ -89,6 +89,25 @@ void MX_USART1_UART_Init(void)
 }
 
 /* USER CODE BEGIN 1 */
-
+/**
+  * @brief  Retargets the C library printf function to USART1.
+  * @param  ch: character to send
+  * @retval character sent
+  */
+int __io_putchar(int ch)
+{
+  if (ch == '\n')
+  {
+    while (!LL_USART_IsActiveFlag_TXE(USART1))
+    {
+    }
+    LL_USART_TransmitData8(USART1, '\r');
+  }
+  while (!LL_USART_IsActiveFlag_TXE(USART1))
+  {
+  }
+  LL_USART_TransmitData8(USART1, (uint8_t)ch);
+  return ch;
+}
 /* USER CODE END 1 */
 
