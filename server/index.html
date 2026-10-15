@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitor Wilgotności Gleby (LoRa)</title>
-    <!-- Chart.js do rysowania lekkich wykresów -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
@@ -99,7 +98,6 @@
 </div>
 
 <script>
-    // Konfiguracja wykresu Chart.js
     const ctx = document.getElementById('moistureChart').getContext('2d');
     const chart = new Chart(ctx, {
         type: 'line',
@@ -124,35 +122,35 @@
                     title: { display: true, text: 'Wilgotność (%)' }
                 },
                 x: {
-                    title: { display: true, text: 'Godzina' }
+                    title: { display: true, text: 'Czas' }
                 }
             }
         }
     });
 
-    // Funkcja pobierająca najnowsze dane i historię
     async function fetchData() {
         try {
-            // 1. Pobieramy ostatni pomiar
-            const latestRes = await fetch('/api/latest');
+            const [latestRes, historyRes] = await Promise.all([
+                fetch('/api/latest'),
+                fetch('/api/history?limit=30')
+            ]);
+
             const latestJson = await latestRes.json();
-            
             if (latestJson.status === 'ok') {
                 const item = latestJson.data;
                 document.getElementById('humidity').innerHTML = `${item.humidity} <span class="unit">%</span>`;
                 document.getElementById('battery').innerHTML = `${item.battery_voltage} <span class="unit">V</span>`;
                 document.getElementById('sensor_id').textContent = item.sensor_id;
-                
+
                 const timeFormatted = new Date(item.timestamp).toLocaleTimeString();
                 document.getElementById('last-updated').textContent = `Ostatnia aktualizacja: ${timeFormatted}`;
             }
 
-            // 2. Pobieramy historię do wykresu (ostatnie 30 próbek)
-            const historyRes = await fetch('/api/history?limit=30');
             const historyJson = await historyRes.json();
-
             if (historyJson.status === 'ok') {
-                const labels = historyJson.data.map(p => new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+                const labels = historyJson.data.map(p =>
+                    new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                );
                 const values = historyJson.data.map(p => p.humidity);
 
                 chart.data.labels = labels;
@@ -160,17 +158,14 @@
                 chart.update();
             }
         } catch (err) {
-            console.error('Błąd pobierania danych:', err);
+            console.error('[Dashboard] Fetch error:', err);
         }
     }
 
-    // Pierwsze pobranie danych
+    /* Initial fetch and 5s polling interval */
     fetchData();
-
-    // Automatyczne odświeżanie danych co 5 sekund
     setInterval(fetchData, 5000);
 </script>
 
 </body>
 </html>
-

@@ -1,61 +1,79 @@
-import serial
+import glob
 import json
+import os
 import re
 import sys
 import time
+from typing import Optional
+import serial
+
 from database import add_measurement, init_db
 
-# Domyślny port szeregowy dla mostka XIAO nRF52840
-SERIAL_PORT = "/dev/ttyACM0"
+DEFAULT_PORT = "/dev/serial0"
 BAUD_RATE = 115200
 
-def run_bridge(port=SERIAL_PORT, baud=BAUD_RATE):
-    """
-    Nasłuchuje na porcie szeregowym, odbiera pakiety wypisane przez mostek LoRa
-    i automatycznie zapisuje je do bazy SQLite na Raspberry Pi.
-    """
+def find_serial_port(preferred: str = DEFAULT_PORT) -> str:
+    """Detect available USB CDC/ACM, FTDI or Raspberry Pi GPIO UART ports."""
+    candidates = glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
+    for gpio_port in ["/dev/serial0", "/dev/ttyS0", "/dev/ttyAMA0"]:
+        if os.path.exists(gpio_port) and gpio_port not in candidates:
+            candidates.append(gpio_port)
+
+    if preferred in candidates:
+        return preferred
+    return candidates[0] if candidates else preferred
+
+def run_bridge(port: Optional[str] = None, baud: int = BAUD_RATE) -> None:
     init_db()
-    print(f"--- Uruchomiono mostek UART -> SQLite na porcie {port} ({baud} bps) ---")
-    print("Oczekiwanie na ramki LoRa z czujnikow...")
+    print(f"[Bridge] Starting UART telemetry listener (baud: {baud})...")
 
     while True:
+        target_port = port if port else find_serial_port()
         try:
-            with serial.Serial(port, baud, timeout=1) as ser:
-                print(f"[OK] Polaczono z urzadzeniem na {port}")
+            with serial.Serial(target_port, baud, timeout=1) as ser:
+                print(f"[Bridge] Connected to {target_port}")
                 while True:
-                    line = ser.readline().decode('utf-8', errors='ignore').strip()
+                    line = ser.readline().decode("utf-8", errors="ignore").strip()
                     if not line:
                         continue
 
-                    # Wykrywanie JSON w linii z mostka
-                    # np. 'Dane (UART -> RPi): {"id":"plant_pot_1","hum":48.6,"vbat":4.06,"seq":3}'
-                    json_match = re.search(r'\{.*\}', line)
+                    # Extract JSON telemetry payload
+                    json_match = re.search(r"\{.*\}", line)
                     if json_match:
                         try:
-                            data = json.loads(json_match.group(0))
-                            sensor_id = data.get("id", "unknown")
-                            humidity = float(data.get("hum", 0.0))
-                            voltage = float(data.get("vbat", 0.0))
-                            seq = data.get("seq", 0)
+                            # Sanitize null values if MCU emitted incomplete fields
+                            raw_json = json_match.group(0)
+                            sanitized = re.sub(r":\s*,", ":null,", raw_json)
+                            sanitized = re.sub(r":\s*\}", ":null}", sanitized)
+
+                            data = json.loads(sanitized)
+                            sensor_id = str(data.get("id", "unknown"))
+                            seq = int(data.get("seq", 0))
+
+                            hum_raw = data.get("hum")
+                            vbat_raw = data.get("vbat")
+
+                            humidity = float(hum_raw) if hum_raw is not None else 0.0
+                            voltage = float(vbat_raw) if vbat_raw is not None else 0.0
 
                             add_measurement(
                                 sensor_id=sensor_id,
                                 humidity=humidity,
                                 battery_voltage=voltage
                             )
-                            print(f"[ZAPISANO] #{seq} | Czujnik: {sensor_id} | Wilgotnosc: {humidity}% | Bateria: {voltage}V")
+                            print(f"[Bridge] Stored seq #{seq} | ID: {sensor_id} | Soil: {humidity:.1f}% | Vbat: {voltage:.2f}V")
                         except Exception as parse_err:
-                            print(f"[BLAD PARSOWANIA] {parse_err} w linii: {line}")
+                            print(f"[Bridge] Parse error: {parse_err} in '{line}'")
                     elif "[Heartbeat" in line:
-                        print(f"[STATUS] {line}")
+                        print(f"[Bridge] {line}")
 
         except serial.SerialException as e:
-            print(f"[BLAD POLACZENIA] Nie mozna polaczyc z {port}: {e}. Ponawiam za 3 sekundy...")
+            print(f"[Bridge] Serial error on {target_port}: {e}. Retrying in 3s...")
             time.sleep(3)
         except KeyboardInterrupt:
-            print("\nZatrzymano mostek UART.")
+            print("\n[Bridge] Stopping listener.")
             break
 
 if __name__ == "__main__":
-    port_arg = sys.argv[1] if len(sys.argv) > 1 else SERIAL_PORT
+    port_arg = sys.argv[1] if len(sys.argv) > 1 else None
     run_bridge(port=port_arg)

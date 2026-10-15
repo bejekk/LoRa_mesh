@@ -28,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "radio_e5.h"
+#include "adc_soil.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -118,44 +119,37 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN StartDefaultTask */
   uint32_t seq = 0;
 
-  printf("\r\n");
-  printf("==================================================\r\n");
-  printf("  Seeed Studio LoRa-E5 mini (STM32WLE5JC)\r\n");
-  printf("  Wezel Telemetryczny (Czujnik LoRa Point-to-Point)\r\n");
-  printf("  Parametry: 868.0 MHz | SF7 | BW 125kHz | CR 4/5\r\n");
-  printf("==================================================\r\n\r\n");
+  printf("[Node] LoRa telemetry sensor starting (868 MHz, SF7, BW125)\r\n");
 
-  // Inicjalizacja modemu radiowego LoRa
   if (!radio_e5_init())
   {
-    printf("[BLAD KRYTYCZNY] Inicjalizacja radia LoRa nie powiodla sie!\r\n");
+    printf("[Node] Radio init failed\r\n");
   }
 
-  /* Infinite loop */
-  for(;;)
+  adc_soil_init();
+
+  for (;;)
   {
     seq++;
-    LL_GPIO_SetOutputPin(LED_USER_GPIO_Port, LED_USER_Pin); // Włącz LED na czas transmisji
+    LL_GPIO_SetOutputPin(LED_USER_GPIO_Port, LED_USER_Pin);
 
-    // Symulacja pomiaru (później podłączymy fizyczny ADC wilgotności i pomiar baterii)
-    float hum = 45.0f + (float)(seq % 10) * 0.8f;
-    float vbat = 4.15f - (float)(seq % 20) * 0.01f;
+    uint16_t raw_adc = adc_soil_read_raw();
+    uint16_t permille = adc_soil_raw_to_permille(raw_adc);
+    uint16_t vdda_mv = adc_read_vdda_mv();
 
     char tx_payload[128];
     int len = snprintf(tx_payload, sizeof(tx_payload),
-                       "{\"id\":\"plant_pot_1\",\"hum\":%.1f,\"vbat\":%.2f,\"seq\":%lu}",
-                       hum, vbat, (unsigned long)seq);
+                       "{\"id\":\"plant_pot_1\",\"hum\":%u.%u,\"raw\":%u,\"vbat\":%u.%02u,\"seq\":%lu}",
+                       permille / 10U, permille % 10U,
+                       (unsigned int)raw_adc,
+                       vdda_mv / 1000U, (vdda_mv % 1000U) / 10U,
+                       (unsigned long)seq);
 
-    printf("--------------------------------------------------\r\n");
-    printf("[LoRa-E5 TX #%lu] Wysylam: %s (%d B)\r\n", (unsigned long)seq, tx_payload, len);
+    printf("[TX #%lu] %s (%d B)\r\n", (unsigned long)seq, tx_payload, len);
 
-    // 1. Nadanie ramki telemetrycznej z timeoutem 1000 ms
-    bool tx_ok = radio_e5_send((const uint8_t*)tx_payload, len, 1000);
-    if (tx_ok)
+    if (radio_e5_send((const uint8_t *)tx_payload, len, 1000))
     {
-      printf("  -> Ramka wyslana pomyslnie. Czekam na ACK (max 1500 ms)...\r\n");
-
-      // 2. Otwarcie okna nasłuchu na potwierdzenie ACK od bramy
+      /* Listen for ACK within 1500 ms */
       uint8_t rx_buf[64] = {0};
       float rssi = 0.0f, snr = 0.0f;
       int16_t rx_len = radio_e5_receive(rx_buf, sizeof(rx_buf) - 1, 1500, &rssi, &snr);
@@ -163,27 +157,24 @@ void StartDefaultTask(void *argument)
       if (rx_len > 0)
       {
         rx_buf[rx_len] = '\0';
-        printf("  [SUKCES] Odebrano ACK: '%s' | RSSI: %.1f dBm | SNR: %.1f dB\r\n",
-               (char*)rx_buf, rssi, snr);
+        printf("[ACK] '%s' (RSSI: %.1f dBm, SNR: %.1f dB)\r\n", (char *)rx_buf, rssi, snr);
       }
       else if (rx_len == 0)
       {
-        printf("  [TIMEOUT] Brak odpowiedzi ACK od bramy w oknie 1500 ms.\r\n");
+        printf("[ACK] Timeout\r\n");
       }
       else
       {
-        printf("  [BLAD] Blad ramki RX (kod: %d)!\r\n", rx_len);
+        printf("[ACK] RX error (%d)\r\n", rx_len);
       }
     }
     else
     {
-      printf("  [BLAD] Nie udalo sie nadac pakietu!\r\n");
+      printf("[TX] Failed to transmit\r\n");
     }
 
-    LL_GPIO_ResetOutputPin(LED_USER_GPIO_Port, LED_USER_Pin); // Wyłącz LED
-    printf("--------------------------------------------------\r\n\r\n");
+    LL_GPIO_ResetOutputPin(LED_USER_GPIO_Port, LED_USER_Pin);
 
-    // Odstęp między kolejnymi wysyłkami (5 sekund)
     osDelay(5000);
   }
   /* USER CODE END StartDefaultTask */
